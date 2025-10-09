@@ -5,6 +5,16 @@ from scipy.spatial import cKDTree
 from standard_transform import minnie_transform_nm
 import navis
 import pandas as pd
+
+import logging
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S'
+)
+
 _TOKEN = "8bb19d9702fb74f6d6d01bfb54b85ba7"
 _VERSION = 1507
 CLIENT  = CAVEclient("minnie65_public",auth_token=_TOKEN)
@@ -179,7 +189,6 @@ def reconstruct_neuron(org_neuron, branches):
     root_row = org_neuron.nodes.loc[org_neuron.nodes["parent_id"] == -1].copy()
     root_id = root_row.iloc[0]["node_id"]
 
-    print(root_id)
     root_row['node_id'] = 0
     next_id = 1
    
@@ -224,15 +233,15 @@ def clean_resample(x:navis.TreeNeuron, resample_to):
     tn = x.copy()
     # We split the neuron first into its branches, then we resample each branch 
     branches, _ = split_branches(tn)
-    print(f"--- Skeletons Interface --- clean_resample : Found {len(branches)} branch away from the soma ")
-    print(f"--- Skeletons Interface --- clean_resample : Resampling each branch to {resample_to}")
+    logging.debug(f"--- Skeletons Interface --- clean_resample : Found {len(branches)} branch away from the soma ")
+    logging.debug(f"--- Skeletons Interface --- clean_resample : Resampling each branch to {resample_to}")
     for i in range(len(branches)):
         old_comp =branches[i].nodes['compartment'].values[0]
         old_length = len(branches[i].nodes)
         branches[i] =navis.resample_skeleton(branches[i], resample_to=resample_to)
         branches[i].nodes['compartment'] = old_comp
         new_length = len(branches[i].nodes)
-        print(f"--- Skeletons Interface --- clean_resample : Old length: {old_length} --> New Length {new_length}")
+        logging.debug(f"--- Skeletons Interface --- clean_resample : Old length: {old_length} --> New Length {new_length}")
     return reconstruct_neuron(tn, branches)
 
 
@@ -276,12 +285,12 @@ def extract_dend_axon(tn: navis.TreeNeuron,
     axon_nodes = set(nodes.loc[nodes["compartment"] == 2, "node_id"])
     dend_nodes = set(nodes.loc[nodes["compartment"] == 3, "node_id"])
     soma_nodes = set(nodes.loc[nodes["compartment"] == 1, "node_id"])
-    print(len(axon_nodes), len(dend_nodes), len(soma_nodes))
+    
     if include_soma_in_axon:
         axon_nodes |= soma_nodes
     if include_soma_in_dend:
         dend_nodes |= soma_nodes
-    print(len(dend_nodes), len(axon_nodes))
+   
    
     
     # build helper to generate sub-neuron
@@ -305,3 +314,6 @@ def extract_dend_axon(tn: navis.TreeNeuron,
     dend_tn = build_subtree(dend_nodes, "dendrite")
 
     return [axon_tn, dend_tn]
+
+
+

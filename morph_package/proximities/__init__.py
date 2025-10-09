@@ -27,9 +27,8 @@ def compute_proxmities(nv_pre_tree, nv_post_tree, threshold_um=5):
     groups = [l['ax_node_id'] for l in overlap_list]
     finished_groups = []
     subgraph = ax_graph.subgraph(groups)
-    finished_groups = [list(c) for c in nx.connected_components(subgraph.to_undirected())]
-    print(len(finished_groups))
-    print(list(len(c) for c in finished_groups))
+    finished_groups = [list(int(cc) for cc in c) for c in nx.connected_components(subgraph.to_undirected())]
+    return finished_groups
     
     
     """

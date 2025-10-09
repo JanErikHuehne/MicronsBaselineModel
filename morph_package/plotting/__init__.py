@@ -108,3 +108,72 @@ def plot_skeleton_synapses_2d(
     ax.set_title('Skeleton and synapse locations (x–y projection)')
     plt.tight_layout()
     plt.show()
+
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_proximities_2d(nt, proximity_groups, ax=None, nt_dend=None):
+    """
+    Plot a 2D (x–y) projection of a neuron's axon skeleton and highlight
+    proximity clusters.
+
+    Parameters
+    ----------
+    nt : navis.TreeNeuron
+        The neuron whose axon skeleton is plotted (usually the presynaptic one).
+    proximity_groups : list[list[int]]
+        Output of `compute_proximities()` – each inner list contains node IDs
+        belonging to one proximity cluster.
+    ax : matplotlib.axes.Axes, optional
+        Axis to draw on. If None, a new figure is created.
+    nt_dend : Optional plot the dend skeleton which is part of the overlay.
+
+    Returns
+    -------
+    ax : matplotlib.axes.Axes
+        The axis containing the plot.
+    """
+    nodes = nt.nodes
+    edges = np.asarray(nt.edges)
+
+    # Prepare plotting axis
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(6, 6))
+
+    # --- Plot the entire axon skeleton in light gray
+    xy = nodes[['x', 'y']].values
+    node_index = dict(zip(nodes.node_id.values, range(len(nodes))))
+    for e0, e1 in edges:
+        if e0 in node_index and e1 in node_index:
+            p0, p1 = xy[node_index[e0]], xy[node_index[e1]]
+            ax.plot([p0[0], p1[0]], [p0[1], p1[1]], color='red',  alpha=0.3,lw=0.3, zorder=1)
+
+    if nt_dend: 
+        dnodes = nt_dend.nodes
+        dedges = np.asarray(nt_dend.edges)
+         # --- Plot the entire axon skeleton in light gray
+        xy = dnodes[['x', 'y']].values
+        node_index = dict(zip(dnodes.node_id.values, range(len(dnodes))))
+        for e0, e1 in dedges:
+            if e0 in node_index and e1 in node_index:
+                p0, p1 = xy[node_index[e0]], xy[node_index[e1]]
+                ax.plot([p0[0], p1[0]], [p0[1], p1[1]], color='blue', lw=0.3,  alpha=0.3, zorder=1)
+
+    # --- Assign distinct colors to each proximity cluster
+   
+
+    for group in proximity_groups:
+        group_nodes = nodes[nodes.node_id.isin(group)]
+        ax.scatter(group_nodes['x'], group_nodes['y'],
+                   s=8, color='black', label=f'Cluster ({len(group)} nodes)', zorder=2)
+
+    # --- Format plot
+    ax.set_xlabel('x (µm)')
+    ax.set_ylabel('y (µm)')
+    ax.set_title(f"Axon proximity clusters ({len(proximity_groups)} regions)")
+    ax.set_aspect('equal', 'box')
+    ax.tick_params(direction='out')
+    plt.tight_layout()
+
+    plt.show()
