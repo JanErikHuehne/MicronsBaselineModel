@@ -29,7 +29,6 @@ def convert_coordinates(func):
         if 'post_pt_position' in table.keys():
             table['post_pt_position'] = table['post_pt_position'].apply(_transform_position)
         if 'ctr_pt_position' in table.keys():
-            print('Converting ctr pt position')
             table['ctr_pt_position'] = table['ctr_pt_position'].apply(_transform_position)
         
         return table 

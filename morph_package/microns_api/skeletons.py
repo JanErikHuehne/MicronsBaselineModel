@@ -10,7 +10,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%H:%M:%S'
 )
@@ -43,12 +43,13 @@ def convert_skeleton(sk):
     return sk
 
 
-def map_synapses(sk, synapses):
-    vertices = sk['vertices']
+def map_synapses(tn:navis.TreeNeuron, synapses):
+    
+    vertices = np.vstack(tn.nodes[['x','y','z']].values)
     syn_positions = np.vstack(synapses['ctr_pt_position'].values)
     sk_tree  = cKDTree(vertices)
     dist, ids = sk_tree.query(syn_positions, k=1)  # nearest neighbor for each synapse
-    
+    ids = tn.nodes.iloc[ids]['node_id'].values
     synapses = synapses.copy()
     synapses['nearest_node_id'] = ids
     synapses['distance_to_node'] = dist

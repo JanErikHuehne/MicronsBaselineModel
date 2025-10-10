@@ -14,10 +14,13 @@ _RESOLUTION = np.array([4,4,40])
 
 
 @convert_coordinates
-def get_synapases(pre_pt_root_id):
-    
+def get_synapases(pre_pt_root_id, post_pt_root_id=None):
     synapse_table_name = CLIENT.info.get_datastack_info()["synapse_table"]
-    syn_df = CLIENT.materialize.query_table(synapse_table_name, filter_equal_dict={'pre_pt_root_id' : pre_pt_root_id}, desired_resolution=_RESOLUTION)
+    if post_pt_root_id:
+        syn_df = CLIENT.materialize.query_table(synapse_table_name, filter_equal_dict={'pre_pt_root_id' : pre_pt_root_id}, desired_resolution=_RESOLUTION)
+        syn_df = syn_df[syn_df['post_pt_root_id'] == post_pt_root_id]
+    else:
+        syn_df = CLIENT.materialize.query_table(synapse_table_name, filter_equal_dict={'pre_pt_root_id' : pre_pt_root_id}, desired_resolution=_RESOLUTION)
     synapses = syn_df[['ctr_pt_position', 'size', 'pre_pt_root_id', 'post_pt_root_id']]
     synapses = synapses[synapses['size'] > 800]
     return synapses
