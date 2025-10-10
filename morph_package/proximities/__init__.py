@@ -22,7 +22,7 @@ class OverlapColletion():
         self.overlaps = [Overlap(o[0],o[1], self) for o in overlaps]
        
         
-    def overlaps(self):
+    def get_overlaps(self):
         """
         Returns a list of overlap lengths. The length of an overlap is determined on the presynaptic 
         side. For more information see morph_pckage.proximities.Overlap.get_overlap_length method.
