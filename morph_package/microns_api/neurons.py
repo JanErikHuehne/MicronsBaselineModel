@@ -178,6 +178,12 @@ def column_neurons():
     print("--- Neuron Interface --- column_neurons : BC neurons within radius: ", len(bc_neurons))
     bc_neurons.filter_axon_extended()
     print("--- Neuron Interface --- column_neurons : BC with axon proofread: ", len(bc_neurons))
-    
+    vip_neurons = get_manual_types()
+    print("--- Neuron Interface --- column_neurons : Filtering L23 neurons, initally found neurons: ", len(vip_neurons))
+    vip_neurons.filter_by_type(['BPC'])
+    print("--- Neuron Interface --- column_neurons : L23 neurons: ", len(vip_neurons))
+    vip_neurons.filter_by_position(np.array([[666.61100865, -196.67104429,  856.69494 ]]), 75)
+    print("--- Neuron Interface --- column_neurons : L23 neurons within radius: ", len(vip_neurons))
+    vip_neurons.filter_axon_extended()
     
     return [l23_neurons, mc_neurons, bc_neurons]
