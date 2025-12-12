@@ -5,8 +5,11 @@ from scipy.spatial import cKDTree
 from standard_transform import minnie_transform_nm
 import navis
 import pandas as pd
-
+from morph_package.constants import NAVSKEL_FOLDER
+from .utils import initalize_navskel_folder
+from tqdm import tqdm 
 import logging
+import pickle 
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -23,6 +26,7 @@ _RESOLUTION = np.array([4,4,40])
 CV = CloudVolume(CLIENT.info.segmentation_source(), progress=False, use_https=True)
 
 
+
 def get_mesh(root_id):
     return CV.mesh.get(root_id)[root_id]
 
@@ -30,18 +34,68 @@ def get_mesh(root_id):
 def get_skeleton(root_id):
     return CLIENT.skeleton.get_skeleton(root_id)
 
+def get_skeletons(root_ids, batch_size=5):
+    """Retrieve skeletons in batches (API allows up to 5 IDs per call)."""
+    results = {}
+    
+    # ensure iterable and remove NaN if needed
+    clean_ids = root_ids
+    
+    for i in tqdm(range(0, len(clean_ids), batch_size)):
+        batch = clean_ids[i:i + batch_size]
+        try:
+            
+            res = CLIENT.skeleton.get_bulk_skeletons(batch)
 
+            results.update(res)
+        except Exception as e:
+            print(f"Batch {i//batch_size + 1} failed for IDs {batch}: {e}")
+    
+    return results
 
 def convert_skeleton(sk):
     transform = minnie_transform_nm()
     def _transform_position(pos):
         return transform.apply(np.array(pos))
-    sk['vertices'] = _transform_position(sk['vertices'])
+    sk['vertices'] = _transform_position(np.array(sk['vertices']))
     
     # Convert  the radius from nm to um 
-    sk['radius']  = sk['radius'] /1000.0
+    sk['radius']  = np.array(sk['radius']) /1000.0
+    
     return sk
 
+def batch_convert_skeletons(sks):
+    """
+    sks is a dict of keys root_id and values skeletons
+    """
+    csks = {}
+    for id,sk in sks.items():
+        csks[id] =convert_skeleton(sk)
+    return csks
+
+@initalize_navskel_folder
+def load_navis_skeletons(ids):
+    cks = {}
+    non_ccached = []
+    for id in ids: 
+        if not NAVSKEL_FOLDER / f"{id}.pkl".exists():
+           non_ccached.append(id)
+        else: 
+            nv_ksel = navis.load_swc(NAVSKEL_FOLDER / f"{id}.pkl")
+            cks[id] = nv_ksel 
+            
+    nc_cks = batch_get_navis_skeletons(batch_convert_skeletons(get_skeletons(non_ccached)))
+    return  {**cks, **nc_cks}
+
+@initalize_navskel_folder
+def batch_get_navis_skeletons(sks):
+    csks = {}
+    for id,sk in sks.items():
+        nv_ksel =get_navis_skeleton(sk)
+        with open(NAVSKEL_FOLDER / f"{id}.pkl", 'wb') as f:
+            pickle.dump(nv_ksel, f, protocol=pickle.HIGHEST_PROTOCOL)
+        csks[id] = nv_ksel
+    return csks
 
 def map_synapses(tn:navis.TreeNeuron, synapses):
     
@@ -276,6 +330,7 @@ def extract_dend_axon(tn: navis.TreeNeuron,
     - The soma can be optionally included in one or both splits.
     """
     if not isinstance(tn, navis.TreeNeuron):
+
         raise TypeError("tn must be a navis.TreeNeuron")
     if "compartment" not in tn.nodes.columns:
         raise ValueError("tn.nodes must contain a 'compartment' column")
