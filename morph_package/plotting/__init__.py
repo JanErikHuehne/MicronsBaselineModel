@@ -61,7 +61,7 @@ def plot_skeleton_synapses_2d(
 
     Parameters
     ----------
-    skel : dict or similar
+    skel : dict or navis.TreeNeuron
         Contains 'vertices' (N×3 array) and 'edges' (M×2 array).
     synapses : DataFrame or dict, optional
         Should contain 'ctr_pt_position' column or key of shape (K×3).
@@ -78,8 +78,17 @@ def plot_skeleton_synapses_2d(
     figsize : tuple
         Figure size.
     """
-    verts = np.asarray(skel['vertices'])
-    edges = np.asarray(skel['edges'])
+    if isinstance(skel, dict):
+        verts = np.asarray(skel['vertices'])
+        edges = np.asarray(skel['edges'])
+    else:
+        verts = np.vstack(skel.nodes[['x', 'y', 'z']].values)
+        edges = np.asarray(skel.edges)
+        node_ids = skel.nodes['node_id'].values
+        node_id_to_index = {nid: i for i, nid in enumerate(node_ids)}
+        edges = np.vectorize(node_id_to_index.get)(edges)
+        print(len(verts))
+        print(edges.max())
 
     fig, ax = plt.subplots(figsize=figsize)
 
