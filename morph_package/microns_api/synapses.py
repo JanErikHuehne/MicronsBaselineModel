@@ -1,17 +1,13 @@
-from caveclient import CAVEclient 
-from cloudvolume import CloudVolume
-import numpy as np 
-from .utils import convert_coordinates
+import numpy as np
 import time
 import random
+from caveclient import CAVEclient 
+from cloudvolume import CloudVolume
+from morph_package.microns_api.utils import convert_coordinates
+from morph_package.constants import CLIENT, RESOLUTION
 
 
 
-_TOKEN = "8bb19d9702fb74f6d6d01bfb54b85ba7"
-_VERSION = 1507
-CLIENT  = CAVEclient("minnie65_public",auth_token=_TOKEN)
-CLIENT.version = _VERSION
-_RESOLUTION = np.array([4,4,40])
 
 
 
@@ -30,20 +26,20 @@ def get_synapases(pre_pt_root_id=None, post_pt_root_id=None, max_retries=10, bas
                 syn_df = CLIENT.materialize.query_table(
                     synapse_table_name,
                     filter_equal_dict={'pre_pt_root_id': pre_pt_root_id},
-                    desired_resolution=_RESOLUTION
+                    desired_resolution=RESOLUTION
                 )
                 syn_df = syn_df[syn_df['post_pt_root_id'] == post_pt_root_id]
             elif post_pt_root_id:
                 syn_df = CLIENT.materialize.query_table(
                     synapse_table_name,
                     filter_equal_dict={'post_pt_root_id': post_pt_root_id},
-                    desired_resolution=_RESOLUTION
+                    desired_resolution=RESOLUTION
                 )
             elif pre_pt_root_id:
                 syn_df = CLIENT.materialize.query_table(
                     synapse_table_name,
                     filter_equal_dict={'pre_pt_root_id': pre_pt_root_id},
-                    desired_resolution=_RESOLUTION
+                    desired_resolution=RESOLUTION
                 )
 
             # Filter and return
