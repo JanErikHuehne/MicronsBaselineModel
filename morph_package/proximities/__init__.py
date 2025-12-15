@@ -1,12 +1,9 @@
-from ..microns_api.synapses import get_synapases
-from ..microns_api.skeletons import map_synapses
-
-from scipy.spatial import cKDTree
 import numpy as np 
 import navis 
 import networkx as nx 
-
-
+from scipy.spatial import cKDTree
+from morph_package.microns_api.synapses import get_synapases
+from morph_package.microns_api.skeletons import map_synapses
 
 class OverlapColletion():
     def __init__(self,overlaps, axon_tree, dend_tree, axon_pt_root_id, dend_pt_root_id, **kwargs):
