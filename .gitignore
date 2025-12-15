@@ -6,6 +6,7 @@
 /notebooks
 /deprecated
 /data
+morph_package/data/
 /plots
 /skeletons
 __pycache__
