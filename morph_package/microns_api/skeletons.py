@@ -1,15 +1,15 @@
-from caveclient import CAVEclient 
-from cloudvolume import CloudVolume
 import numpy as np 
-from scipy.spatial import cKDTree
-from standard_transform import minnie_transform_nm
 import navis
 import pandas as pd
-from morph_package.constants import NAVSKEL_FOLDER
-from .utils import initalize_navskel_folder
-from tqdm import tqdm 
 import logging
 import pickle 
+from cloudvolume import CloudVolume
+from tqdm import tqdm 
+from scipy.spatial import cKDTree
+from standard_transform import minnie_transform_nm
+from morph_package.microns_api.utils import initalize_navskel_folder, logged
+from morph_package.constants import NAVSKEL_FOLDER,CLIENT, NAVSKEL_FOLDER
+
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -18,22 +18,21 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-_TOKEN = "8bb19d9702fb74f6d6d01bfb54b85ba7"
-_VERSION = 1507
-CLIENT  = CAVEclient("minnie65_public",auth_token=_TOKEN)
-CLIENT.version = _VERSION
-_RESOLUTION = np.array([4,4,40])
+
+
+
 CV = CloudVolume(CLIENT.info.segmentation_source(), progress=False, use_https=True)
 
 
-
+@logged()
 def get_mesh(root_id):
     return CV.mesh.get(root_id)[root_id]
 
-
+@logged()
 def get_skeleton(root_id):
     return CLIENT.skeleton.get_skeleton(root_id)
 
+@logged()
 def get_skeletons(root_ids, batch_size=5):
     """Retrieve skeletons in batches (API allows up to 5 IDs per call)."""
     results = {}
@@ -53,6 +52,7 @@ def get_skeletons(root_ids, batch_size=5):
     
     return results
 
+@logged()
 def convert_skeleton(sk):
     transform = minnie_transform_nm()
     def _transform_position(pos):
@@ -64,6 +64,7 @@ def convert_skeleton(sk):
     
     return sk
 
+@logged()
 def batch_convert_skeletons(sks):
     """
     sks is a dict of keys root_id and values skeletons
@@ -73,30 +74,38 @@ def batch_convert_skeletons(sks):
         csks[id] =convert_skeleton(sk)
     return csks
 
+@logged()
 @initalize_navskel_folder
 def load_navis_skeletons(ids):
     cks = {}
     non_ccached = []
     for id in ids: 
-        if not NAVSKEL_FOLDER / f"{id}.pkl".exists():
+        if not (NAVSKEL_FOLDER / f"{id}.pkl").exists():
            non_ccached.append(id)
         else: 
-            nv_ksel = navis.load_swc(NAVSKEL_FOLDER / f"{id}.pkl")
-            cks[id] = nv_ksel 
+            with open(NAVSKEL_FOLDER / f"{id}.pkl", 'rb') as f:
+                 cks[int(id)] = pickle.load(f)
             
     nc_cks = batch_get_navis_skeletons(batch_convert_skeletons(get_skeletons(non_ccached)))
     return  {**cks, **nc_cks}
 
+@logged()
 @initalize_navskel_folder
 def batch_get_navis_skeletons(sks):
     csks = {}
     for id,sk in sks.items():
         nv_ksel =get_navis_skeleton(sk)
         with open(NAVSKEL_FOLDER / f"{id}.pkl", 'wb') as f:
+            pickle.dump(nv_ksel, f)
+        #navis.write_swc(nv_ksel, NAVSKEL_FOLDER / f"{id}.swc")
+        """
+        with open(NAVSKEL_FOLDER / f"{id}.pkl", 'wb') as f:
             pickle.dump(nv_ksel, f, protocol=pickle.HIGHEST_PROTOCOL)
-        csks[id] = nv_ksel
+        """
+        csks[int(id)] = nv_ksel
     return csks
 
+@logged()
 def map_synapses(tn:navis.TreeNeuron, synapses):
     
     vertices = np.vstack(tn.nodes[['x','y','z']].values)
@@ -109,7 +118,7 @@ def map_synapses(tn:navis.TreeNeuron, synapses):
     synapses['distance_to_node'] = dist
     return synapses
 
-
+@logged()
 def get_navis_skeleton(skeleton):
     """
     Convert a skeleton with compartments and radii into a navis.TreeNeuron.
@@ -155,7 +164,7 @@ def get_navis_skeleton(skeleton):
 
     return tn
 
-
+@logged()
 def split_branches(x : navis.TreeNeuron) -> list[navis.TreeNeuron]:
     """
     Split a TreeNeuron into its primary branches emanating from the soma.
@@ -233,7 +242,7 @@ def split_branches(x : navis.TreeNeuron) -> list[navis.TreeNeuron]:
 
     return branches, root_children
    
-    
+@logged()
 def reconstruct_neuron(org_neuron, branches):
     if not isinstance(org_neuron, navis.TreeNeuron):
         raise TypeError("org_neuron must be a navis.TreeNeuron")
@@ -278,7 +287,8 @@ def reconstruct_neuron(org_neuron, branches):
             name=f"reconstructed_{org_neuron.name or 'neuron'}"
         )
     return branch_tn
-    
+
+@logged()
 def clean_resample(x:navis.TreeNeuron, resample_to):
     """
     This method is wrapper arround the navis.resample_skeleton method. 
@@ -299,7 +309,7 @@ def clean_resample(x:navis.TreeNeuron, resample_to):
         logging.debug(f"--- Skeletons Interface --- clean_resample : Old length: {old_length} --> New Length {new_length}")
     return reconstruct_neuron(tn, branches)
 
-
+@logged()
 def extract_dend_axon(tn: navis.TreeNeuron,
                       include_soma_in_axon: bool = False,
                       include_soma_in_dend: bool = True) -> tuple[navis.TreeNeuron, navis.TreeNeuron]:
