@@ -4,7 +4,7 @@ from morph_package.microns_api.utils import initalize_overlaps_folder
 from morph_package.constants import OVERLAPS_FOLDER
 from morph_package.microns_api.skeletons import load_navis_skeletons, extract_dend_axon, clean_resample
 from morph_package.proximities import compute_proxmities
-
+from tqdm import tqdm 
 logger = logging.getLogger(__name__)
 
 
@@ -75,7 +75,7 @@ def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=Fa
     n_done = 0
     n_fail = 0
 
-    for i, (pre, post) in enumerate(to_compute, start=1):
+    for i, (pre, post) in tqdm(enumerate(to_compute, start=1)):
         path = OVERLAPS_FOLDER / f"pre{pre}_post{post}.pkl"
         logger.debug(
             "Compute start | idx=%d/%d pre=%s post=%s",
@@ -85,12 +85,17 @@ def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=Fa
         try:
             if pre not in pre_axon_cache:
                 pre_nv = pre_nvs[pre]
-                pre_axon_cache[pre] = clean_resample(extract_dend_axon(pre_nv)[0], "1 microns")
+               
+                extracted_neuron = extract_dend_axon(pre_nv)
+                assert extracted_neuron[0], 'Axon not found in this neuron, skipping'
+                pre_axon_cache[pre] = clean_resample(extracted_neuron[0], "1 microns")
                 logger.debug("Prepared pre axon | pre=%s", pre)
 
             if post not in post_dend_cache:
                 post_nv = post_nvs[post]
-                post_dend_cache[post] = clean_resample(extract_dend_axon(post_nv)[1], "1 microns")
+                extracted_neuron = extract_dend_axon(post_nv)
+                assert extracted_neuron[1], 'Dend not found in this neuron, skipping'
+                post_dend_cache[post] = clean_resample(extracted_neuron[1], "1 microns")
                 logger.debug("Prepared post dendrite | post=%s", post)
 
             overlaps = compute_proxmities(
@@ -123,7 +128,7 @@ def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=Fa
             n_fail += 1
             logger.exception("Compute failed | pre=%s post=%s", pre, post)
             # choose behavior: continue or fail-fast
-            raise
+            continue
 
     logger.info(
         "Done | cached=%d computed=%d failed=%d returned=%d",
