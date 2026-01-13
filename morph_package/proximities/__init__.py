@@ -199,7 +199,35 @@ class OverlapDataset:
     def __len__(self) -> int:
         return len(self._records)
     
-    
+    def add(
+        self,
+        pairs: Union[Pair, Iterable[Pair]],
+        *,
+        overwrite: bool = True,
+    ):
+        # normalize pairs
+        if isinstance(pairs, tuple) and len(pairs) == 2 and all(isinstance(x, int) for x in pairs):
+            pairs_iter = [(int(pairs[0]), int(pairs[1]))]
+        else:
+            pairs_iter = [(int(a), int(d)) for (a, d) in pairs]  # type: ignore
+        # avoid pointless work
+        if not overwrite:
+            pairs_iter = [p for p in pairs_iter if p not in self._records]
+        added: List[Pair] = []
+        for axon_id, dend_id in tqdm(pairs_iter):
+            key = (axon_id, dend_id)
+            pkl_path = OVERLAPS_FOLDER / f"pre{axon_id}_post{dend_id}.pkl"
+            collection = self._load_collection(pkl_path)
+            rec = self._record_from_collection(
+                axon_id=axon_id,
+                dend_id=dend_id,
+                collection=collection,
+                cache_path=str(pkl_path),
+            )
+            self._records[key] = rec
+            added.append(key)
+        return added
+            
     def add_parallel(
         self,
         pairs: Union[Pair, Iterable[Pair]],
