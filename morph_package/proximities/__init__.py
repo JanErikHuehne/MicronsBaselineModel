@@ -1,10 +1,19 @@
 import numpy as np 
 import navis 
+import pickle
 import networkx as nx 
+import pandas as pd 
+from pathlib import Path 
+from tqdm import tqdm 
 from scipy.spatial import cKDTree
+from morph_package.constants import OVERLAPS_FOLDER
 from morph_package.microns_api.synapses import get_synapases
 from morph_package.microns_api.skeletons import map_synapses
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, asdict
+from typing import Dict, Iterable, List, Optional, Tuple, Union, Any, Sequence
 
+Pair = Tuple[int, int]
 class OverlapColletion():
     def __init__(self,overlaps, axon_tree, dend_tree, axon_pt_root_id, dend_pt_root_id, **kwargs):
         self.axon_pt_root_id = axon_pt_root_id
@@ -154,6 +163,289 @@ def compute_proxmities(nv_pre_tree, nv_post_tree, threshold_um=5, **kwargs):
     return OverlapColletion([(a,list(d)) for a,d in zip(finished_groups, dendrite_groups)],nv_pre_tree, nv_post_tree, **kwargs)
         
    
+
+@dataclass
+class OverlapRecord: 
+    axon_id: int
+    dend_id: int
+    
+    overlap_lengths: List[float]
+    post_soma_distances: List[float]
+    
+    total_overlap_length: float 
+    n_overlap_groups: int 
+    
+    n_synapses_total: int 
+    synapses : pd.DataFrame
+    cache_path: Optional[str]
+    
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        return d 
     
 
+class OverlapDataset: 
+    """
+    Stores overlap summaries keyed by (axon_id, dend_id)
     
+    Internal storage:
+        self._record[(axon_id, dend_id)] = OverlapRecord(...)
+    """
+    
+    def __init__(self):
+        self._records: Dict[Pair, OverlapRecord] = {}
+    
+    
+    def __len__(self) -> int:
+        return len(self._records)
+    
+    
+    def add_parallel(
+        self,
+        pairs: Union[Pair, Iterable[Pair]],
+        *,
+        overwrite: bool = True,
+        max_workers: int = 30,
+        strict: bool = False,
+    ) -> List[Pair]:
+        """
+        Parallel add using threads. Good for loading/unpickling many pickles.
+
+        - strict=False: skip failures
+        - strict=True: raise first exception encountered
+        """
+        # normalize pairs
+        if isinstance(pairs, tuple) and len(pairs) == 2 and all(isinstance(x, int) for x in pairs):
+            pairs_iter = [(int(pairs[0]), int(pairs[1]))]
+        else:
+            pairs_iter = [(int(a), int(d)) for (a, d) in pairs]  # type: ignore
+
+        # avoid pointless work
+        if not overwrite:
+            pairs_iter = [p for p in pairs_iter if p not in self._records]
+        print('Computing overlaps for {} pairs'.format(len(pairs_iter)))
+        def worker(axon_id: int, dend_id: int):
+            key = (axon_id, dend_id)
+            pkl_path = OVERLAPS_FOLDER / f"pre{axon_id}_post{dend_id}.pkl"
+            collection = self._load_collection(pkl_path)
+            rec = self._record_from_collection(
+                axon_id=axon_id,
+                dend_id=dend_id,
+                collection=collection,
+                cache_path=str(pkl_path),
+            )
+            return key, rec
+
+        added: List[Pair] = []
+        # sensible default if user passes nonsense
+        max_workers = int(max_workers) if max_workers is not None else 8
+        if max_workers <= 0:
+            max_workers = 8
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(worker, ax, de): (ax, de) for ax, de in pairs_iter}
+            print(len(futures))
+            for fut in tqdm(as_completed(futures), total=len(futures),desc="Loading overlaps"):
+               
+                try:
+                    key, rec = fut.result()
+                    # single-threaded mutation is safe here (we only mutate in this loop)
+                    self._records[key] = rec
+                    added.append(key)
+                except Exception as e:
+                    if strict:
+                        raise
+                    print(e)
+                    continue
+
+        return added
+
+    
+    @staticmethod
+    def _load_collection(path: Path) -> Any:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+        
+    def _record_from_collection(
+        self,
+        *,
+        axon_id: int,
+        dend_id: int,
+        collection: Any,
+        cache_path: Optional[str],
+    ) -> OverlapRecord:
+        """
+        Extract only the pieces you want from OverlapCollection.
+        Assumes OverlapCollection provides:
+            - get_overlaps() -> list[float]  (per overlap group length)
+            - post_soma_distances() -> list[float]
+            - synapses: DataFrame or []/None
+            - synapses_in_overlaps() -> int
+        """
+        overlap_lengths = list(map(float, collection.get_overlaps()))
+        post_soma_distances = list(map(float, collection.post_soma_distances()))
+
+        total_overlap_length = float(np.sum(overlap_lengths)) if overlap_lengths else 0.0
+
+        n_overlap_groups = int(len(overlap_lengths))
+
+        syn_obj = getattr(collection, "synapses", None)
+
+        # collection.synapses is either a DataFrame (your code) or [] when empty
+        if isinstance(syn_obj, pd.DataFrame):
+            n_synapses_total = int(len(syn_obj))
+            synapses_df = syn_obj.copy(deep=False) 
+        elif syn_obj is None:
+            n_synapses_total = 0
+            synapses_df = None
+        else:
+            # [] or other iterable----
+            try:
+                n_synapses_total = int(len(syn_obj))
+            except Exception:
+                n_synapses_total = 0
+            synapses_df = None
+
+      
+        return OverlapRecord(
+            axon_id=axon_id,
+            dend_id=dend_id,
+            overlap_lengths=overlap_lengths,
+            post_soma_distances=post_soma_distances,
+            total_overlap_length=total_overlap_length,
+            n_overlap_groups=n_overlap_groups,
+            n_synapses_total=n_synapses_total,
+            synapses=synapses_df,
+            cache_path=cache_path,
+        )
+    def save(self, *, overwrite: bool = True) -> Path:
+        """
+        Pickle the entire OverlapDataset to:
+            OVERLAPS_FOLDER / "overlap_dataset.pkl"
+        """
+        path = OVERLAPS_FOLDER / "overlap_dataset.pkl"
+
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"{path} already exists")
+
+        with open(path, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        return path
+    
+    @staticmethod
+    def load() -> "OverlapDataset | None":
+        """
+        Load OVERLAPS_FOLDER / 'overlap_dataset.pkl' if it exists.
+        Returns None if the file is not present.
+        """
+        path = OVERLAPS_FOLDER / "overlap_dataset.pkl"
+        if not path.exists():
+            return None
+
+        with open(path, "rb") as f:
+            return pickle.load(f)
+        
+    def overlap_length_matrix(
+        self,
+        axon_ids: Sequence[int],
+        dend_ids: Sequence[int],
+        *,
+        min_soma_dist: Optional[float] = None,
+        max_soma_dist: Optional[float] = None,
+        fill_value: float = 0.0,
+        dtype=np.float64,
+    ) -> np.ndarray:
+        """
+        Returns a (n_pre, n_post) numpy array of overlap lengths.
+
+        Entry (i, j) = sum of overlap_lengths for (axon_ids[i], dend_ids[j])
+        after filtering overlap groups by post_soma_distances.
+
+        Distance filter per overlap group d:
+            - min_soma_dist: keep if d >= min_soma_dist
+            - max_soma_dist: keep if d <= max_soma_dist
+            - both: min <= d <= max
+        """
+        axon_ids = [int(a) for a in axon_ids]
+        dend_ids = [int(d) for d in dend_ids]
+        mat = np.full((len(axon_ids), len(dend_ids)), fill_value, dtype=dtype)
+        for i, ax in enumerate(axon_ids):
+            for j, de in enumerate(dend_ids):
+                rec = self._records.get((ax, de))
+                if rec is None:
+                    continue
+
+                L = np.asarray(rec.overlap_lengths, dtype=float)
+                if L.size == 0:
+                    mat[i, j] = 0.0
+                    continue
+
+                D = np.asarray(rec.post_soma_distances, dtype=float)
+
+                keep = np.ones_like(L, dtype=bool)
+                if min_soma_dist is not None:
+                    keep &= (D >= float(min_soma_dist))
+                if max_soma_dist is not None:
+                    keep &= (D <= float(max_soma_dist))
+
+                mat[i, j] = L[keep].sum() if np.any(keep) else 0.0
+        return mat
+    
+    def sum_over_posts_per_pre(
+        self,
+        axon_ids: Sequence[int],
+        dend_ids: Sequence[int],
+        *,
+        min_soma_dist: Optional[float] = None,
+        max_soma_dist: Optional[float] = None,
+        fill_value: float = 0.0,
+        dtype=np.float64,
+    ) -> np.ndarray:
+        """
+        Returns a (n_pre,) vector where entry i is the sum of overlap lengths for
+        axon_ids[i] across all dend_ids, with optional soma-distance filtering.
+        """
+        M = self.overlap_length_matrix(
+            axon_ids,
+            dend_ids,
+            min_soma_dist=min_soma_dist,
+            max_soma_dist=max_soma_dist,
+            fill_value=fill_value,
+            dtype=dtype,
+        )
+        return M.sum(axis=1)
+    
+    def sum_over_pres_per_post(
+        self,
+        axon_ids: Sequence[int],
+        dend_ids: Sequence[int],
+        *,
+        min_soma_dist: Optional[float] = None,
+        max_soma_dist: Optional[float] = None,
+        fill_value: float = 0.0,
+        dtype=np.float64,
+    ) -> np.ndarray:
+        """
+        Returns a (n_post,) vector where entry j is the sum of overlap lengths for
+        dend_ids[j] across all axon_ids, with optional soma-distance filtering.
+        """
+        M = self.overlap_length_matrix(
+            axon_ids,
+            dend_ids,
+            min_soma_dist=min_soma_dist,
+            max_soma_dist=max_soma_dist,
+            fill_value=fill_value,
+            dtype=dtype,
+        )
+        return M.sum(axis=0)
+    
+    
+        
+
+        
+        
+        
+        
+        
+        
