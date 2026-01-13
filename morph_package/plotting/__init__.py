@@ -58,10 +58,13 @@ class SkeletonPlotter:
                 **kwargs,
             )
 
+
+
     def add_skeleton(
         self,
         neuron,
         values=None,
+        compartments=True,
         cmap="viridis",
         color="black",
         linewidth=0.5,
@@ -69,9 +72,66 @@ class SkeletonPlotter:
         label=None,
         zorder=1,
         add_colorbar=False,
+        soma_size=30,
     ):
         verts, edges = self._extract_vertices_edges(neuron)
 
+        # ---- categorical compartments (default behavior if provided) ----
+        if compartments :
+            compartments = neuron.nodes["compartment"].values
+            # default compartment styling
+            COMP_COLORS = {
+                1: "black",  # soma
+                2: "red",    # axon
+                3: "blue",   # dendrite
+            }
+
+            for u, v in edges:
+                p0, p1 = verts[u], verts[v]
+
+                cu, cv = compartments[u], compartments[v]
+
+                # mixed edge → prioritize non-soma color
+                if cu == cv:
+                    c = COMP_COLORS.get(cu, "gray")
+                else:
+                    c = COMP_COLORS.get(cv if cv != 1 else cu, "gray")
+
+                self._plot_edge(
+                    p0, p1,
+                    color=c,
+                    lw=linewidth,
+                    alpha=alpha,
+                    zorder=zorder,
+                )
+
+            # draw soma nodes as large black circles
+            soma_idx = np.where(compartments == 1)[0]
+            if len(soma_idx) > 0:
+                soma_pts = verts[soma_idx]
+                if self.projection == "2d":
+                    self.ax.scatter(
+                        soma_pts[:, 0],
+                        soma_pts[:, 1],
+                        s=soma_size,
+                        c="black",
+                        alpha=alpha,
+                        zorder=zorder + 1,
+                    )
+                else:
+                    self.ax.scatter(
+                        soma_pts[:, 0],
+                        soma_pts[:, 2],
+                        soma_pts[:, 1],
+                        s=soma_size,
+                        c="black",
+                        alpha=alpha,
+                        zorder=zorder + 1,
+                    )
+
+            return self
+
+        # ---- continuous scalar coloring (original behavior) ----
         if values is not None:
             values = np.asarray(values)
             norm = Normalize(np.nanmin(values), np.nanmax(values))
@@ -84,7 +144,7 @@ class SkeletonPlotter:
                 c = color
             else:
                 cval = 0.5 * (values[u] + values[v])
-                c = cmap_func(cval)
+                c = cmap_func(norm(cval))
 
             self._plot_edge(
                 p0,
@@ -101,6 +161,7 @@ class SkeletonPlotter:
             self.fig.colorbar(sm, ax=self.ax, label=label)
 
         return self
+
     
     def add_synapses(
         self,
@@ -174,11 +235,15 @@ class SkeletonPlotter:
     ):
         self.ax.set_xlabel(f"x ({self.units})")
         self.ax.set_ylabel(f"y ({self.units})")
-        self.ax.invert_zaxis()
+        
+       
         if self.projection == "3d":
             self.ax.set_zlabel(f"z ({self.units})")
-        elif equal_aspect:
-            self.ax.set_aspect("equal", "box")
+            self.ax.invert_zaxis()
+        else:
+            if equal_aspect:
+                self.ax.set_aspect("equal", "box")
+            self.ax.invert_yaxis()
 
         if title:
             self.ax.set_title(title)
