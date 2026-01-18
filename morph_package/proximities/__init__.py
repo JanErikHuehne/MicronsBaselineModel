@@ -39,7 +39,7 @@ class OverlapColletion():
         """
         Returns a list of distances from the soma to the closest postsynaptic node in each overlap group.
         """
-        return [c.post_soma_distance for c in self.overlaps]
+        return [c.get_post_soma_distance() for c in self.overlaps]
     
     
     def synapses_in_overlaps(self):
@@ -108,8 +108,9 @@ class Overlap():
         for d_node in self.dend_nodes:
             d_geo = navis.dist_between(self.collection.dend_tree, soma_node, d_node) 
             distances.append(d_geo)
-            
+       
         self.post_soma_distance = min(distances)
+        return distances 
     
     
     def get_associated_synapses(self):
@@ -170,7 +171,7 @@ class OverlapRecord:
     dend_id: int
     
     overlap_lengths: List[float]
-    post_soma_distances: List[float]
+    post_soma_distances: List[List[float]]
     
     total_overlap_length: float 
     n_overlap_groups: int 
@@ -214,7 +215,7 @@ class OverlapDataset:
         if not overwrite:
             pairs_iter = [p for p in pairs_iter if p not in self._records]
         added: List[Pair] = []
-        for axon_id, dend_id in tqdm(pairs_iter):
+        for axon_id, dend_id in pairs_iter:
             key = (axon_id, dend_id)
             pkl_path = OVERLAPS_FOLDER / f"pre{axon_id}_post{dend_id}.pkl"
             collection = self._load_collection(pkl_path)
@@ -306,12 +307,12 @@ class OverlapDataset:
         Extract only the pieces you want from OverlapCollection.
         Assumes OverlapCollection provides:
             - get_overlaps() -> list[float]  (per overlap group length)
-            - post_soma_distances() -> list[float]
+            - post_soma_distances() -> list[list[float]]
             - synapses: DataFrame or []/None
             - synapses_in_overlaps() -> int
         """
         overlap_lengths = list(map(float, collection.get_overlaps()))
-        post_soma_distances = list(map(float, collection.post_soma_distances()))
+        post_soma_distances = [[float(x) for x in overlap] for overlap in collection.post_soma_distances()]
 
         total_overlap_length = float(np.sum(overlap_lengths)) if overlap_lengths else 0.0
 
@@ -352,7 +353,7 @@ class OverlapDataset:
             OVERLAPS_FOLDER / "overlap_dataset.pkl"
         """
         path = OVERLAPS_FOLDER / "overlap_dataset.pkl"
-
+        print(f"Saving to {path}")
         if path.exists() and not overwrite:
             raise FileExistsError(f"{path} already exists")
 
@@ -409,7 +410,7 @@ class OverlapDataset:
                     mat[i, j] = 0.0
                     continue
 
-                D = np.asarray(rec.post_soma_distances, dtype=float)
+                D = np.asarray(rec.post_soma_distances, dtype=float).min(axis=0)
 
                 keep = np.ones_like(L, dtype=bool)
                 if min_soma_dist is not None:
