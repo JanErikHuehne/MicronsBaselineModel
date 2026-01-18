@@ -469,6 +469,34 @@ class OverlapDataset:
         )
         return M.sum(axis=0)
     
+    def synapse_matrix(self, axon_ids, dend_ids):
+        axon_ids = [int(a) for a in axon_ids]
+        dend_ids = [int(d) for d in dend_ids]
+        mat = np.full((len(axon_ids), len(dend_ids)), 0, dtype=int)
+        for i, ax in enumerate(axon_ids):
+            for j, de in enumerate(dend_ids):
+                rec = self._records.get((ax, de))
+                if rec is None:
+                    continue
+                else:
+                    mat[i, j] = rec.n_synapses_total
+        
+        return mat 
+    
+    def overlap_candidate_matrix(self, axon_ids, dend_ids):
+        axon_ids = [int(a) for a in axon_ids]
+        dend_ids = [int(d) for d in dend_ids]
+        mat = np.full((len(axon_ids), len(dend_ids)), False, dtype=int)
+        for i, ax in enumerate(axon_ids):
+            for j, de in enumerate(dend_ids):
+                rec = self._records.get((ax, de))
+                if rec is None:
+                    continue
+                else:
+                    mat[i, j] = rec.n_overlap_groups 
+        
+        return mat
+    
     
         
 
