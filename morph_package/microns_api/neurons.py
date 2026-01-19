@@ -7,7 +7,7 @@ from collections.abc import MutableMapping
 from typing import Union, Iterable, Optional
 from morph_package.constants import CLIENT
 from morph_package.microns_api.utils import convert_coordinates
-
+import warnings
 
 class NeuronTypes(MutableMapping):
     """
@@ -232,3 +232,77 @@ def get_column_neurons(
             print(f"--- get_column_neurons --- {ct}: {len(out[ct])}")
 
     return out
+
+
+
+class InputClassifier():
+    def __init__(self, include_partner_classes=None):
+        self.include_partner_classes = include_partner_classes
+        self.tau_dom = 0.5 # dominance fraction 
+        self.delta = 0.2 # dominance margin over 2nd 
+        self.tau_mix = 0.35 # minium for b oth in a mixed pair 
+        self.eps = 0.15 # Closeness of top two 
+        self.tau_low = 0.2 # all other must be samll of a mixed pair 
+        self.tau_tri = 0.25 # for a triplet all three must at least be this 
+        self.min_syn = 1 # minimum synapses to consider
+    
+    
+    def classify(self, xs, mode='type'):
+        """
+        # Docstring for InputClassifier.classify    
+        Classify input synapse categories into 'dominant', 'mixed', 'triplet', or 'unspecific' based on predefined thresholds.
+        Parameters:
+        xs (iterable): 1D array-like input of synapse categories.
+        mode (str): Classification mode, when type cs must contain neuron types, when "raw" xs contains pt_root_id values 
+        which will be mapped to neuron types using get_manual_types.
+
+        """
+        
+        assert mode == 'type', "InputClassifier.classify: only mode='type' is currently supported"
+        
+        try: 
+            xs = np.array(xs, dtype=float)
+            assert len(xs.shape) == 1
+        except AssertionError as e: 
+            raise ValueError("InputClassifier.classify: input xs must be 1D") from e
+        except Exception as e: 
+            raise ValueError("InputClassifier.classify: unable to convert xs, aborting") from e
+        
+        if xs.size < self.min_syn:
+            warnings.warn("InputClassifier.classify: number of synapses below minimum, returning 'unspecific'")
+            return "unspecific"
+
+        
+        values, counts = np.unique(xs, return_counts=True)
+        count_map = dict(zip(values, counts))
+        filtered_counts = np.array([count_map.get(cat, 0) for cat in self.include_partner_classes])
+        if np.sum(filtered_counts) <= self.min_syn:
+            warnings.warn("InputClassifier.classify: number of synapses from included partner classes  below minimum, returning 'unspecific'")
+            return "unspecific"
+        else:
+            filtered_counts = filtered_counts / np.sum(filtered_counts)
+            
+        idx_sorted = np.argsort(filtered_counts)[::-1]
+        
+      
+        first_val = counts[idx_sorted[0]]
+        second_val = counts[idx_sorted[1]] 
+        third_val = counts[idx_sorted[2]]
+        rest = 1 - (first_val + second_val + third_val)
+        
+        if first_val > self.tau_dom and (first_val - second_val) > self.delta:
+            return "D-{}".format(self.include_partner_classes[idx_sorted[0]])
+        elif (first_val > self.tau_mix) and (second_val > self.tau_mix) and (abs(first_val - second_val) < self.eps) and (rest < self.tau_low):
+            return "M-{}-{}".format(self.include_partner_classes[idx_sorted[0]], self.include_partner_classes[idx_sorted[1]])
+        elif (first_val > self.tau_tri) and (second_val > self.tau_tri) and (third_val > self.tau_tri):
+            return "T-{}-{}-{}".format(self.include_partner_classes[idx_sorted[0]], self.include_partner_classes[idx_sorted[1]], self.include_partner_classes[idx_sorted[2]])
+        else:
+            return "unspecific"
+        
+        
+        
+    
+            
+        
+        
+        
