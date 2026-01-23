@@ -348,12 +348,15 @@ class OverlapDataset:
             synapses=synapses_df,
             cache_path=cache_path,
         )
-    def save(self, *, overwrite: bool = True) -> Path:
+    def save(self, *, path=None, overwrite: bool = True) -> Path:
         """
         Pickle the entire OverlapDataset to:
             OVERLAPS_FOLDER / "overlap_dataset.pkl"
         """
-        path = OVERLAPS_FOLDER / "overlap_dataset.pkl"
+        if not path:
+            path = OVERLAPS_FOLDER / "overlap_dataset.pkl"
+        else:
+            path =Path(path) / "overlap_dataset.pkl"
         print(f"Saving to {path}")
         if path.exists() and not overwrite:
             raise FileExistsError(f"{path} already exists")
