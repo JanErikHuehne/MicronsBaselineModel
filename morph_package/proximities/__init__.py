@@ -218,6 +218,7 @@ class OverlapDataset:
         for axon_id, dend_id in pairs_iter:
             key = (axon_id, dend_id)
             pkl_path = OVERLAPS_FOLDER / f"pre{axon_id}_post{dend_id}.pkl"
+           
             collection = self._load_collection(pkl_path)
             rec = self._record_from_collection(
                 axon_id=axon_id,
@@ -363,12 +364,15 @@ class OverlapDataset:
         return path
     
     @staticmethod
-    def load() -> "OverlapDataset | None":
+    def load(path) -> "OverlapDataset | None":
         """
         Load OVERLAPS_FOLDER / 'overlap_dataset.pkl' if it exists.
         Returns None if the file is not present.
         """
-        path = OVERLAPS_FOLDER / "overlap_dataset.pkl"
+        if not path:
+            path = OVERLAPS_FOLDER / "overlap_dataset.pkl"
+        else:
+            path = Path(path)
         if not path.exists():
             return None
 
@@ -410,8 +414,16 @@ class OverlapDataset:
                     mat[i, j] = 0.0
                     continue
 
-                D = np.asarray(rec.post_soma_distances, dtype=float).min(axis=0)
+                lists = rec.post_soma_distances
+                max_len = max(len(x) for x in lists)
 
+                D = np.min(
+                    np.vstack([
+                        np.pad(x, (0, max_len - len(x)), constant_values=np.inf)
+                        for x in lists
+                    ]),
+                    axis=1
+                )
                 keep = np.ones_like(L, dtype=bool)
                 if min_soma_dist is not None:
                     keep &= (D >= float(min_soma_dist))
