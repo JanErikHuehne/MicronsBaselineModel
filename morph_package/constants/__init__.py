@@ -26,6 +26,16 @@ def set_api_version(version: int):
     API_VERSION = version
     CLIENT.version = API_VERSION
     
+
+
+LAYER_BOUNDARIES = {
+    "l1" : [0, 62.83360145],
+    "l23": [62.83360145, 227.2999053],
+    "l4" : [227.2999053, 362.8920013],
+    "l5" : [362.8920013, 504.76536649],
+    "l6" : [504.76536649, 714.45315768],
+    }
+
     
 
 
