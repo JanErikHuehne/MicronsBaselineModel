@@ -1,51 +1,73 @@
 import logging
 import pickle
 from morph_package.microns_api.utils import initalize_overlaps_folder
-from morph_package.constants import OVERLAPS_FOLDER
+from morph_package.constants import *
 from morph_package.microns_api.skeletons import load_navis_skeletons, extract_dend_axon, clean_resample
 from morph_package.proximities import compute_proxmities
 from tqdm import tqdm 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.DEBUG)
 
 @initalize_overlaps_folder
-def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=False):
+def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=False, combinations=True):
     """
     Calculate overlaps between all (pre axon) x (post dendrite) pairs.
     Uses cached overlap pickles unless overwrite=True.
     """
     axon_pt_root_ids = list(axon_pt_root_ids)
     dend_pt_root_ids = list(dend_pt_root_ids)
-
     n_pre = len(axon_pt_root_ids)
     n_post = len(dend_pt_root_ids)
-    total_pairs = n_pre * n_post
-
-    logger.info(
-        "Starting overlap workflow | n_pre=%d n_post=%d total_pairs=%d overwrite=%s overlaps_dir=%s",
-        n_pre, n_post, total_pairs, overwrite, str(OVERLAPS_FOLDER),
-    )
-
     overlaps_list = []
-    to_compute = []
-    n_cached = 0
+    if combinations:
 
-    for pre in axon_pt_root_ids:
-        for post in dend_pt_root_ids:
-            path = OVERLAPS_FOLDER / f"pre{pre}_post{post}.pkl"
-            if (not overwrite) and path.exists():
-                try:
-                    with open(path, "rb") as f:
-                        overlaps = pickle.load(f)
-                    overlaps_list.append([pre, post, overlaps])
-                    n_cached += 1
-                    logger.debug("Cache hit | pre=%s post=%s file=%s", pre, post, str(path))
-                except Exception:
-                    # If cache is corrupt/unreadable, recompute
-                    logger.exception("Cache read failed; will recompute | pre=%s post=%s file=%s", pre, post, str(path))
+        total_pairs = n_pre * n_post
+        logger.info(
+        "NAVSKEL_FOLDER exists=%s, n_entries=%d",
+        NAVSKEL_FOLDER.exists(),
+        sum(1 for _ in NAVSKEL_FOLDER.iterdir()) if NAVSKEL_FOLDER.exists() else 0,
+        )
+
+        logger.info(
+            "OVERLAPS_FOLDER exists=%s, n_entries=%d",
+            OVERLAPS_FOLDER.exists(),
+            sum(1 for _ in OVERLAPS_FOLDER.iterdir()) if OVERLAPS_FOLDER.exists() else 0,
+        )
+        logger.info(
+            "Starting overlap workflow | n_pre=%d n_post=%d total_pairs=%d overwrite=%s overlaps_dir=%s",
+            n_pre, n_post, total_pairs, overwrite, str(OVERLAPS_FOLDER),
+        )
+
+        
+        to_compute = []
+        n_cached = 0
+
+        for pre in axon_pt_root_ids:
+            for post in dend_pt_root_ids:
+                path = OVERLAPS_FOLDER / f"pre{pre}_post{post}.pkl"
+                if (not overwrite) and path.exists():
+                    try:
+                        with open(path, "rb") as f:
+                            overlaps = pickle.load(f)
+                        overlaps_list.append([pre, post, overlaps])
+                        n_cached += 1
+                        logger.debug("Cache hit | pre=%s post=%s file=%s", pre, post, str(path))
+                    except Exception:
+                        # If cache is corrupt/unreadable, recompute
+                        logger.exception("Cache read failed; will recompute | pre=%s post=%s file=%s", pre, post, str(path))
+                        to_compute.append((pre, post))
+                else:
                     to_compute.append((pre, post))
-            else:
-                to_compute.append((pre, post))
+    else:
+        
+
+       
+        n_cached = 0
+        to_compute = [(ax, dend) for ax, dend in zip(axon_pt_root_ids, dend_pt_root_ids)]
+        logger.info(
+            "Starting overlap workflow | total_pairs=%d overwrite=%s overlaps_dir=%s",
+            len(to_compute), overwrite, str(OVERLAPS_FOLDER),
+        )
 
     logger.info(
         "Pair partition | cached=%d to_compute=%d",
@@ -67,7 +89,7 @@ def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=Fa
     except Exception:
         logger.exception("Skeleton loading failed")
         raise
-
+    logger.info("Loaded navis skeletons | pre_ids=%d post_ids=%d", len(pre_nvs), len(post_nvs))
     # Cache processed morphologies to avoid repeated split/resample
     pre_axon_cache = {}
     post_dend_cache = {}
@@ -120,8 +142,8 @@ def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=Fa
 
             if n_done % 50 == 0 or n_done == len(to_compute):
                 logger.info(
-                    "Progress | computed=%d/%d (%.1f%%) cached=%d total_returned=%d",
-                    n_done, len(to_compute), 100.0 * n_done / len(to_compute), n_cached, len(overlaps_list),
+                    "Progress | computed=%d/%d (%.1f%%) cached=%d",
+                    n_done, len(to_compute), 100.0 * n_done / len(to_compute), n_cached,
                 )
 
         except Exception:
@@ -134,5 +156,5 @@ def workflow_overlap_generation(axon_pt_root_ids, dend_pt_root_ids, overwrite=Fa
         "Done | cached=%d computed=%d failed=%d returned=%d",
         n_cached, n_done, n_fail, len(overlaps_list),
     )
-    return overlaps_list
+    return []
 
