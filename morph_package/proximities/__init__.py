@@ -10,7 +10,7 @@ from scipy.spatial import cKDTree
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from typing import Dict, Iterable, List, Optional, Tuple, Union, Any, Sequence
-
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from morph_package.constants import OVERLAPS_FOLDER
 from morph_package.microns_api.synapses import get_synapases
 from morph_package.microns_api.skeletons import map_synapses, load_navis_skeletons, extract_dend_axon, clean_resample, load_single_skeleton_from_disk_safe
@@ -581,64 +581,40 @@ class OverlapDataset:
     
     
     def filter_records(self, axon_soma_dist=5, force_recalc=False, n_workers=8):
-        """
-        Returns a new OverlapDataset with records re-filtered by axon-dendrite distance.
-
-        Records that already satisfy the skip condition (axon_soma_dist < self.distance
-        and total_overlap_length == 0.0) are carried over unchanged unless `force_recalc`
-        is set. All remaining records are re-filtered in parallel using a ThreadPoolExecutor.
-
-        Parameters
-        ----------
-        axon_soma_dist : float, optional
-            Maximum surface-to-surface distance (microns) used to re-filter overlaps.
-            Default is 5.
-        force_recalc : bool, optional
-            If True, bypasses the skip condition and recalculates every record regardless
-            of its current state. Default is False.
-        n_workers : int, optional
-            Number of parallel threads to use for recalculation. Default is 8.
-
-        Returns
-        -------
-        OverlapDataset
-            Deep copy of self with qualifying records re-filtered.
-        """
+        """..."""
 
         self_copy = copy.deepcopy(self)
 
-        # --- Step 1: Partition records into those that need recalculation and those that don't ---
+        # --- Step 1: Partition ---
         to_recalc = {}
         to_skip   = {}
-
         for key, rec in self._records.items():
             if not force_recalc and axon_soma_dist < self.distance and rec.total_overlap_length == 0.0:
-                to_skip[key] = rec       # Condition not met — carry over unchanged
+                to_skip[key] = rec
             else:
-                to_recalc[key] = rec     # Needs re-filtering
-
-        # Pre-warm: load everything into memory on the main thread before parallelising
-        print("Pre-warming skeleton cache...")
-        for pre,post in tqdm(to_recalc.keys()):
-            load_single_skeleton_from_disk_safe(pre)
-            load_single_skeleton_from_disk_safe(post)
-            
+                to_recalc[key] = rec
 
         if force_recalc:
             print(f"Force recalc enabled — all {len(to_recalc)} records queued.")
         else:
             print(f"{len(to_recalc)} records queued for recalculation, {len(to_skip)} skipped.")
 
-        # --- Step 2: Recalculate qualifying records in parallel ---
-        def _recalc(item):
-            """Worker: re-filters a single record and returns (key, updated_record)."""
-            key, rec = item
-            updated = self._filter_overlap_record(rec, axon_dend_dist=axon_soma_dist)
-            return key, updated
+        # --- Step 2: Pre-warm disk cache on main process BEFORE spawning workers ---
+        # Each worker process will re-read from disk but at least it's local pkl files
+        print("Pre-warming skeleton cache...")
+        for pre, post in tqdm(to_recalc.keys()):
+            load_single_skeleton_from_disk_safe(pre)
+            load_single_skeleton_from_disk_safe(post)
 
+        # --- Step 3: Parallel recalculation with ProcessPoolExecutor ---
+        # Each worker gets its own memory space — caches rebuild per-process but
+        # disk reads are fast and numpy work is truly parallel (no GIL)
         results = {}
-        with ThreadPoolExecutor(max_workers=n_workers) as executor:
-            futures = {executor.submit(_recalc, item): item[0] for item in to_recalc.items()}
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {
+                executor.submit(_recalc_worker, item, axon_soma_dist): item[0]
+                for item in to_recalc.items()
+            }
             for future in tqdm(as_completed(futures), total=len(futures), desc="Filtering records"):
                 try:
                     key, updated_record = future.result()
@@ -646,9 +622,9 @@ class OverlapDataset:
                 except Exception as e:
                     key = futures[future]
                     print(f"Record {key} failed: {e}")
-                    results[key] = self._records[key]   # Fall back to original on failure
+                    results[key] = self._records[key]
 
-        # --- Step 3: Merge skipped and recalculated records back into the copy ---
+        # --- Step 4: Merge ---
         self_copy._records.update(to_skip)
         self_copy._records.update(results)
 
@@ -823,115 +799,52 @@ class OverlapDataset:
     
     def _calc_proximities(self, nv_pre_tree, nv_post_tree, axon_dend_dist=1):
         """
-            Identifies spatial overlap groups between an axon and a dendrite skeleton.
-
-            For each axon node, computes surface-to-surface distances to all dendrite
-            nodes (accounting for both radii). Axon nodes within `axon_dend_dist` of
-            any dendrite node are flagged as overlapping. Overlapping axon nodes that
-            are also topologically connected in the axon graph are merged into a single
-            group. Each group is returned alongside the union of dendrite node IDs it
-            overlaps with.
-
-            Parameters
-            ----------
-            nv_pre_tree : navis.TreeNeuron
-                The pre-synaptic (axon) skeleton. Must have node attributes:
-                'node_id', 'x', 'y', 'z', 'radius'.
-            nv_post_tree : navis.TreeNeuron
-                The post-synaptic (dendrite) skeleton. Must have node attributes:
-                'node_id', 'x', 'y', 'z', 'radius'.
-            axon_dend_dist : float, optional
-                Maximum allowed surface-to-surface distance (in the tree's spatial
-                units) for two nodes to be considered overlapping. Negative values
-                indicate sphere overlap. Default is 1.
-
-            Returns
-            -------
-            finished_groups : list of list of int
-                Each inner list contains the axon node IDs belonging to one
-                topologically connected overlap group.
-            dendrite_groups : list of set of int
-                Parallel to `finished_groups`. Each set contains the dendrite node
-                IDs that fall within `axon_dend_dist` of any axon node in the
-                corresponding group.
-
-            Notes
-            -----
-            - Distance is computed as surface-to-surface: 
-            ``dist = ||center_ax - center_dend|| - (radius_ax + radius_dend)``
-            - Axon node grouping respects the axon's graph topology via
-            ``nx.connected_components`` on the undirected subgraph of overlapping nodes.
-            - `finished_groups[i]` and `dendrite_groups[i]` always correspond to the
-            same overlap group.
-
-            Example
-            -------
-            >>> finished_groups, dendrite_groups = obj._calc_proximities(
-            ...     nv_pre_tree=axon, nv_post_tree=dendrite, axon_dend_dist=0.5
-            ... )
-            >>> print(finished_groups[0])   # axon node IDs in first group
-            >>> print(dendrite_groups[0])   # dendrite node IDs overlapping with it
+        ...docstring unchanged...
         """
-        
-     
-        
-        # Extract dendrite node radii, IDs, and positions from the post-synaptic tree
-        dend_r = nv_post_tree.nodes['radius'].values.astype(float)
-        dend_nodes = nv_post_tree.nodes['node_id'].values
-        dend_pos = nv_post_tree.nodes[['x', 'y', 'z']].values.astype(float)
-        
-        
-        
-        overlap_list = [] # Axon nodes that are within axon_dend_dist of at least one dendrite node
-        ax_dend_dict = {} # Maps each overlapping axon node_id -> set of nearby dendrite ndoe_ids 
-        
-        # --- Step 1: Find axon nodes that are spatially close to any dendrite node --- 
-        for _,ax_node in nv_pre_tree._get_nodes().iterrows():
-            
-            ax_node_pos = ax_node[['x', 'y', 'z']].values[np.newaxis, ...].astype(float)
-            ax_node_id = ax_node['node_id']
-            ax_r = float(ax_node['radius'])
-            
-            
-            # Compute center-to-center distances from this axon node to all dendrite nodes 
-            center_dists = np.linalg.norm(dend_pos - ax_node_pos, axis=1).astype(float)
-            
-            # Convert to surface-to-surface distances by substracting both radii 
-            surface_dists = center_dists - (ax_r + dend_r)
- 
-            min_d = surface_dists.min() # closests dendrite surface distance for this axon node 
-            
-            # Keep this axon node if any dendrite node is within axon_dend_dist
-            close_mask = surface_dists <= axon_dend_dist
-            if np.any(close_mask):
-                overlap_list.append({'ax_node_id': ax_node_id, 'min_dist': min_d})
-                # Store which dendrite nodes are close to this axon node for later grouping
-                ax_dend_dict[ax_node_id] = set(int(d) for d in dend_nodes[close_mask])
-        
+
+        # --- Extract all node data as numpy arrays upfront — avoids per-row pandas overhead ---
+        ax_nodes  = nv_pre_tree._get_nodes()
+        ax_pos    = ax_nodes[['x', 'y', 'z']].values.astype(float)  # (N, 3)
+        ax_r      = ax_nodes['radius'].values.astype(float)          # (N,)
+        ax_ids    = ax_nodes['node_id'].values                       # (N,)
+
+        dend_pos  = nv_post_tree.nodes[['x', 'y', 'z']].values.astype(float)  # (M, 3)
+        dend_r    = nv_post_tree.nodes['radius'].values.astype(float)          # (M,)
+        dend_ids  = nv_post_tree.nodes['node_id'].values                       # (M,)
+
+        # --- Step 1: Compute all pairwise surface-to-surface distances in one broadcast ---
+        # ax_pos[:, np.newaxis] is (N, 1, 3) — broadcasts against dend_pos (M, 3) → diff (N, M, 3)
+       # With this — same result, significantly faster:
+        diff = ax_pos[:, np.newaxis] - dend_pos          # (N, M, 3)
+        center_dists = np.sqrt((diff ** 2).sum(axis=2))  # (N, M)
+        surface_dists = center_dists - (ax_r[:, np.newaxis] + dend_r)             # (N, M)
+
+        # Boolean mask: which (axon, dendrite) pairs are within threshold
+        close_mask     = surface_dists <= axon_dend_dist   # (N, M)
+        ax_has_overlap = close_mask.any(axis=1)            # (N,) — axon nodes with any close dend
+
+        # Build ax_dend_dict only for overlapping axon nodes
+        overlap_indices = np.where(ax_has_overlap)[0]
+        ax_dend_dict = {
+            int(ax_ids[i]): set(int(d) for d in dend_ids[close_mask[i]])
+            for i in overlap_indices
+        }
+
         # --- Step 2: Group connected overlapping axon nodes using the axon's graph topology ---
-        ax_graph = nv_pre_tree.graph
-        
-        # Extract just the axon node IDs that had overlaps for subgraphing
-        groups = [l['ax_node_id'] for l in overlap_list]
-        
-        # Build a subgraph from only the overlapping axon nodes, the find connected components 
-        # (i.e. spatially overlapping axon nodes that are also topologically connected)
-        subgraph = ax_graph.subgraph(groups) 
-        finished_groups = [list(int(cc) for cc in c) 
-                           for c in nx.connected_components(subgraph.to_undirected())]
-        
-        # --- Step 3: For each axon group, collected the union of all nearby dendrite node IDs ---
-        dendrite_groups = []
-        for group in finished_groups:
-            dend_set = set()
-            for ax_node in group:
-                dend_set.update(ax_dend_dict[ax_node]) # Union of all dendrite nodes across the whole axon group  
-            dendrite_groups.append(list(dend_set))
-        
-        # Returns 
-        #  finished_groups[i] --> list of axon node IDs in overlap group i 
-        #  dendrite_groups[i] --> list of dendrite node IDs in overlap group i 
-        return (finished_groups, dendrite_groups)
+        overlap_ax_ids  = ax_ids[ax_has_overlap].tolist()
+        subgraph        = nv_pre_tree.graph.subgraph(overlap_ax_ids)
+        finished_groups = [
+            list(int(cc) for cc in c)
+            for c in nx.connected_components(subgraph.to_undirected())
+        ]
+
+        # --- Step 3: Union dendrite node IDs across each connected axon group ---
+        dendrite_groups = [
+            list(set().union(*(ax_dend_dict[ax_id] for ax_id in group)))
+            for group in finished_groups
+        ]
+
+        return finished_groups, dendrite_groups
 
 
     def _record_from_collection(
@@ -1018,3 +931,16 @@ def poisson_null_matrices(candidates: np.ndarray, rate: float, n: int = 100, rng
     return rng.poisson(lam=lam, size=(n,) + lam.shape).astype(np.int32)
 
 
+# At module level — outside any class
+def _recalc_worker(item, axon_dend_dist):
+    """
+    Module-level worker for ProcessPoolExecutor.
+    Must be at module level to be picklable.
+    Each worker process has its own memory cache that builds up as it processes records.
+    """
+    key, rec = item
+    # Import here to ensure each worker process has its own state
+    from morph_package.proximities import OverlapDataset
+    dataset_instance = OverlapDataset()  # lightweight instance just for calling the method
+    updated = dataset_instance._filter_overlap_record(rec, axon_dend_dist=axon_dend_dist)
+    return key, updated
