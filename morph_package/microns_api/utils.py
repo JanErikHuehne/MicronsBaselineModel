@@ -3,6 +3,7 @@ import pandas as pd
 import functools
 import logging
 import time
+from cortical_layers.LayerPredictor import LayerClassifier
 from standard_transform import minnie_transform_nm
 from morph_package.constants import NAVSKEL_FOLDER, OVERLAPS_FOLDER, RESOLUTION
 from functools import wraps
@@ -97,3 +98,25 @@ def logged(level: int = logging.DEBUG):
 
         return wrapper
     return deco
+
+
+def get_layer_boudaries(coordinates):
+    if type(coordinates) is np.ndarray:
+        coordinates = coordinates.tolist()
+    assert type(coordinates) is list
+    # 'data' must match a supported volume in the package
+    classifier = LayerClassifier(data="minnie65_phase3")
+    # -> array(["L4"], dtype='<U3')  (example output)
+    trans = minnie_transform_nm()
+    values = trans.invert([coordinates])
+    y_boundaries =classifier.layer_bounds(values[0,0], values[0,2])
+    boundary_points = [[values[0,0], y,values[0,2]] for y in y_boundaries]
+    boundary_points = trans.apply(boundary_points)
+    boundary_points = boundary_points[:,1]
+    
+    return {"l1" : [0, boundary_points[0]],
+            "l23": [boundary_points[0], boundary_points[1]],
+            "l4" : [boundary_points[1], boundary_points[2]],
+            "l5" : [boundary_points[2], boundary_points[3]],
+            "l6" : [boundary_points[3],  boundary_points[4]]}
+    
