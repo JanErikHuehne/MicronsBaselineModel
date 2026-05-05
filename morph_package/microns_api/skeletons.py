@@ -5,11 +5,17 @@ import logging
 import pickle 
 from cloudvolume import CloudVolume
 from tqdm import tqdm 
+import functools
 from scipy.spatial import cKDTree
 from standard_transform import minnie_transform_nm
 from morph_package.microns_api.utils import initalize_navskel_folder, logged
 from morph_package.constants import NAVSKEL_FOLDER,CLIENT, NAVSKEL_FOLDER
+from time import sleep
 
+
+import threading
+
+_cache_lock = threading.Lock()
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -44,8 +50,8 @@ def get_skeletons(root_ids, batch_size=5):
         batch = clean_ids[i:i + batch_size]
         try:
             
-            res = CLIENT.skeleton.get_bulk_skeletons(batch)
-
+            res = CLIENT.skeleton.get_bulk_skeletons(batch, skeleton_version=-1, generate_missing_skeletons=True)
+            print(res)
             results.update(res)
         except Exception as e:
             print(f"Batch {i//batch_size + 1} failed for IDs {batch}: {e}")
@@ -74,6 +80,20 @@ def batch_convert_skeletons(sks):
         csks[id] =convert_skeleton(sk)
     return csks
 
+
+
+
+@functools.lru_cache(maxsize=1000)
+def _load_single_skeleton_from_disk(id):
+    with open(NAVSKEL_FOLDER / f"{id}.pkl", 'rb') as f:
+          return pickle.load(f)
+    return None 
+    
+def load_single_skeleton_from_disk_safe(id):
+    """Thread-safe wrapper around the cached skeleton loading function."""
+    with _cache_lock:
+        return _load_single_skeleton_from_disk(id)
+
 @logged()
 @initalize_navskel_folder
 def load_navis_skeletons(ids):
@@ -83,20 +103,27 @@ def load_navis_skeletons(ids):
         if not (NAVSKEL_FOLDER / f"{id}.pkl").exists():
            non_ccached.append(id)
         else: 
-            with open(NAVSKEL_FOLDER / f"{id}.pkl", 'rb') as f:
-                 cks[int(id)] = pickle.load(f)
-            
-    nc_cks = batch_get_navis_skeletons(batch_convert_skeletons(get_skeletons(non_ccached)))
+            cks[int(id)] =load_single_skeleton_from_disk_safe(id)
+
+                 
+    #print(f'Loading {len(non_ccached)}')
+    #print(non_ccached)
+    nc_cks = {}
+    for batch_start in range(0, len(non_ccached), 10):
+        #print(f'Loading batch_start {batch_start}')
+        nc_cks = batch_get_navis_skeletons(batch_convert_skeletons(get_skeletons(non_ccached[batch_start:batch_start+10])))
     return  {**cks, **nc_cks}
 
 @logged()
 @initalize_navskel_folder
 def batch_get_navis_skeletons(sks):
+    print('len(sks)=', len(sks))
     csks = {}
     for id,sk in sks.items():
         nv_ksel =get_navis_skeleton(sk)
         with open(NAVSKEL_FOLDER / f"{id}.pkl", 'wb') as f:
             pickle.dump(nv_ksel, f)
+        print('Saved ', NAVSKEL_FOLDER / f"{id}.pkl")
         #navis.write_swc(nv_ksel, NAVSKEL_FOLDER / f"{id}.swc")
         """
         with open(NAVSKEL_FOLDER / f"{id}.pkl", 'wb') as f:
