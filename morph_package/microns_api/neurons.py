@@ -172,7 +172,7 @@ def get_mtypes():
     STC Sparsly Targetting - Neuroglia cells and L1 interneurons 
     ITC Inhibitory Targetting Cells, Mostly VIP cells
     """
-    name = "aibs_metamodel_celltypes_v661"
+    name = "aibs_metamodel_mtypes_v661_v2"
     return NeuronTypes(CLIENT.materialize.query_table(name), 'm-type')
 
 
@@ -195,6 +195,9 @@ def get_column_neurons(
         base = get_ctypes()
 
         ty = "c-type"
+    elif source =='dtype':
+        base = get_mtypes()
+        ty = "m-type"
     else:
         raise ValueError("source must be 'manual' or 'ctype'")
 
@@ -216,6 +219,32 @@ def get_column_neurons(
         if verbose:
             print(f"--- get_column_neurons --- proofread({proofread}): {len(base)}")
 
+    
+    # Some pt_root_ids were classified as bad because of missing axons or other inconsistencies, we 
+    # need to filter them out here, list to be extended in the future 
+
+    EXCLUDE = {
+    864691135060769435, 864691136043337814, 864691137021996142,
+    864691135942086401, 864691135989595395, 864691135928339726,
+    864691135997241770, 864691136275106238, 864691136331104234,
+    864691135774202363, 864691135106433613, 864691135274736401,
+    864691135571427462, 864691135339982310,
+    864691135662059248, 864691136313406781, 864691135510593289,
+    864691136620192653, 864691135308295238, 864691135732377785,
+    864691135503439170, 864691136125985318, 864691135694189759,
+    864691135939209988
+        }
+    base.data = base.data[~base.data["pt_root_id"].isin(EXCLUDE)].reset_index(drop=True)
+   
+     
+    # We also filter out bad_ids from the refusal list 
+    bad_ids = CLIENT.skeleton.get_refusal_list()
+    bad_ids =bad_ids[bad_ids['DATASTACK_NAME'] == 'minnie65_phase3_v1']['ROOT_ID'].values.tolist()
+    bad_ids = set(bad_ids)
+    base.data = base.data[~base.data["pt_root_id"].isin(bad_ids)].reset_index(drop=True)
+    
+    if verbose:
+            print(f"--- get_column_neurons --- filtered: {len(base)}")
     # default: return the full filtered set
     if cell_types is None:
         return base
@@ -261,7 +290,7 @@ class InputClassifier():
         assert mode == 'type', "InputClassifier.classify: only mode='type' is currently supported"
         
         try: 
-            xs = np.array(xs, dtype=float)
+            xs = np.array(xs)
             assert len(xs.shape) == 1
         except AssertionError as e: 
             raise ValueError("InputClassifier.classify: input xs must be 1D") from e
@@ -269,40 +298,101 @@ class InputClassifier():
             raise ValueError("InputClassifier.classify: unable to convert xs, aborting") from e
         
         if xs.size < self.min_syn:
-            warnings.warn("InputClassifier.classify: number of synapses below minimum, returning 'unspecific'")
-            return "unspecific"
+            warnings.warn("InputClassifier.classify: number of synapses below minimum, returning 'NaN'")
+            return "NaN"
 
         
         values, counts = np.unique(xs, return_counts=True)
         count_map = dict(zip(values, counts))
         filtered_counts = np.array([count_map.get(cat, 0) for cat in self.include_partner_classes])
         if np.sum(filtered_counts) <= self.min_syn:
-            warnings.warn("InputClassifier.classify: number of synapses from included partner classes  below minimum, returning 'unspecific'")
-            return "unspecific"
+            warnings.warn("InputClassifier.classify: number of synapses from included partner classes  below minimum, returning 'NaN'")
+            return "NaN"
         else:
             filtered_counts = filtered_counts / np.sum(filtered_counts)
-            
         idx_sorted = np.argsort(filtered_counts)[::-1]
         
-      
-        first_val = counts[idx_sorted[0]]
-        second_val = counts[idx_sorted[1]] 
-        third_val = counts[idx_sorted[2]]
+
+        first_val = filtered_counts[idx_sorted[0]]
+        second_val = filtered_counts[idx_sorted[1]] 
+        third_val = filtered_counts[idx_sorted[2]]
         rest = 1 - (first_val + second_val + third_val)
         
         if first_val > self.tau_dom and (first_val - second_val) > self.delta:
-            return "D-{}".format(self.include_partner_classes[idx_sorted[0]])
+            return "D-({})".format(self.include_partner_classes[idx_sorted[0]])
         elif (first_val > self.tau_mix) and (second_val > self.tau_mix) and (abs(first_val - second_val) < self.eps) and (rest < self.tau_low):
-            return "M-{}-{}".format(self.include_partner_classes[idx_sorted[0]], self.include_partner_classes[idx_sorted[1]])
+            return "M-({})-({})".format(self.include_partner_classes[idx_sorted[0]], self.include_partner_classes[idx_sorted[1]])
         elif (first_val > self.tau_tri) and (second_val > self.tau_tri) and (third_val > self.tau_tri):
-            return "T-{}-{}-{}".format(self.include_partner_classes[idx_sorted[0]], self.include_partner_classes[idx_sorted[1]], self.include_partner_classes[idx_sorted[2]])
+            return "T-({})-({})-({})".format(self.include_partner_classes[idx_sorted[0]], self.include_partner_classes[idx_sorted[1]], self.include_partner_classes[idx_sorted[2]])
         else:
             return "unspecific"
+        
+    def batch_classify(self, xs, mode='type'):
+        assert mode =='type', 'InputClassifier.batch_classify: only mode="type" is currently supported'
+        results = []
+        for x in xs:
+            res = self.classify(x, mode=mode)
+            results.append(res)
+        return results
         
         
         
     
+def get_exc_neurons(column_neurons, fine_grained=True):
+    """
+    Get excitatory neurons in the column, optionally split into fine-grained subclasses. Returns a dict of neuron type to pt_root_id array, and a full array of all excitatory pt_root_ids.
+    """
+    
+    l2a_neurons = column_neurons[column_neurons['cell_type'].isin(['L2a'])]['pt_root_id'].values
+    l2b_neurons = column_neurons[column_neurons['cell_type'].isin(['L2b'])]['pt_root_id'].values
+    l2c_neurons = column_neurons[column_neurons['cell_type'].isin(['L2c'])]['pt_root_id'].values
+
+    l3a_neurons = column_neurons[column_neurons['cell_type'].isin(['L3a'])]['pt_root_id'].values
+    l3b_neurons = column_neurons[column_neurons['cell_type'].isin(['L3b'])]['pt_root_id'].values
+
+    l4a_neurons = column_neurons[column_neurons['cell_type'].isin(['L4a'])]['pt_root_id'].values
+    l4b_neurons = column_neurons[column_neurons['cell_type'].isin(['L4b'])]['pt_root_id'].values
+    l4c_neurons = column_neurons[column_neurons['cell_type'].isin(['L4c'])]['pt_root_id'].values
+
+    l5et_neurons = column_neurons[column_neurons['cell_type'].isin(['L5ET'])]['pt_root_id'].values
+    l5np_neurons = column_neurons[column_neurons['cell_type'].isin(['L5NP'])]['pt_root_id'].values
+    l5a_neurons = column_neurons[column_neurons['cell_type'].isin(['L5a'])]['pt_root_id'].values
+    l5b_neurons = column_neurons[column_neurons['cell_type'].isin(['L5b'])]['pt_root_id'].values
+
+    l6shorta_neurons = column_neurons[column_neurons['cell_type'].isin(['L6short-a'])]['pt_root_id'].values
+    l6shortb_neurons = column_neurons[column_neurons['cell_type'].isin(['L6short-b'])]['pt_root_id'].values
+    l6talla_neurons = column_neurons[column_neurons['cell_type'].isin(['L6tall-a'])]['pt_root_id'].values
+    l6tallb_neurons = column_neurons[column_neurons['cell_type'].isin(['L6tall-b'])]['pt_root_id'].values
+    l6tallc_neurons = column_neurons[column_neurons['cell_type'].isin(['L6tall-c'])]['pt_root_id'].values
             
-        
-        
-        
+    if fine_grained:
+        return {
+            'L2a': l2a_neurons,
+            'L2b': l2b_neurons,
+            'L2c': l2c_neurons,
+            'L3a': l3a_neurons,
+            'L3b': l3b_neurons,
+            'L4a': l4a_neurons,
+            'L4b': l4b_neurons,
+            'L4c': l4c_neurons,
+            'L5ET': l5et_neurons,
+            'L5NP': l5np_neurons,
+            'L5a': l5a_neurons,
+            'L5b': l5b_neurons,
+            'L6short-a': l6shorta_neurons,
+            'L6short-b': l6shortb_neurons,
+            'L6tall-a': l6talla_neurons,
+            'L6tall-b': l6tallb_neurons,
+            'L6tall-c': l6tallc_neurons
+        }, np.concatenate([l2a_neurons, l2b_neurons, l2c_neurons, l3a_neurons, l3b_neurons, l4a_neurons, l4b_neurons, l4c_neurons, l5et_neurons, l5np_neurons, l5a_neurons, l5b_neurons, l6shorta_neurons, l6shortb_neurons, l6talla_neurons, l6tallb_neurons, l6tallc_neurons])
+    else:
+        return {
+            'L2': np.concatenate([l2a_neurons, l2b_neurons, l2c_neurons]),
+            'L3': np.concatenate([l3a_neurons, l3b_neurons]),
+            'L4': np.concatenate([l4a_neurons, l4b_neurons, l4c_neurons]),
+            'L5ET': l5et_neurons,
+            'L5NP': l5np_neurons,
+            'L5': np.concatenate([l5a_neurons, l5b_neurons]),
+            'L6short': np.concatenate([l6shorta_neurons, l6shortb_neurons]),
+            'L6tall': np.concatenate([l6talla_neurons, l6tallb_neurons, l6tallc_neurons])
+        }, np.concatenate([l2a_neurons, l2b_neurons, l2c_neurons, l3a_neurons, l3b_neurons, l4a_neurons, l4b_neurons, l4c_neurons, l5et_neurons, l5np_neurons, l5a_neurons, l5b_neurons, l6shorta_neurons, l6shortb_neurons, l6talla_neurons, l6tallb_neurons, l6tallc_neurons])
