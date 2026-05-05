@@ -19,23 +19,27 @@ def get_synapases(pre_pt_root_id=None, post_pt_root_id=None, max_retries=10, bas
     if pre_pt_root_id is None and post_pt_root_id is None:
         raise ValueError("pre_pt_root_id or post_pt_root_id must be provided.")
     attempt = 0
+    if type(pre_pt_root_id) == int:
+        pre_pt_root_id = [pre_pt_root_id]
+    if type(post_pt_root_id) == int:
+        post_pt_root_id = [post_pt_root_id]
     while True:
         try:
             # Try to query the API
-            if post_pt_root_id and pre_pt_root_id:
+            if post_pt_root_id is not None and pre_pt_root_id is not None:
                 syn_df = CLIENT.materialize.query_table(
                     synapse_table_name,
-                    filter_equal_dict={'pre_pt_root_id': pre_pt_root_id},
+                    filter_in_dict={'pre_pt_root_id': pre_pt_root_id},
                     desired_resolution=RESOLUTION
                 )
-                syn_df = syn_df[syn_df['post_pt_root_id'] == post_pt_root_id]
-            elif post_pt_root_id:
+                syn_df = syn_df[syn_df['post_pt_root_id'].isin(post_pt_root_id)]
+            elif post_pt_root_id is not None:
                 syn_df = CLIENT.materialize.query_table(
                     synapse_table_name,
-                    filter_equal_dict={'post_pt_root_id': post_pt_root_id},
+                    filter_in_dict={'post_pt_root_id': post_pt_root_id},
                     desired_resolution=RESOLUTION
                 )
-            elif pre_pt_root_id:
+            elif pre_pt_root_id is not None:
                 syn_df = CLIENT.materialize.query_table(
                     synapse_table_name,
                     filter_equal_dict={'pre_pt_root_id': pre_pt_root_id},
